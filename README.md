@@ -42,6 +42,58 @@ parry   = eta <= window, gated by Config.Cooldown
 
 Defaults: `Window = 0.62`, `Cooldown = 0.12`, `Burst = 2`, `BurstGap = 0.03`.
 
+## Performance (FFlags)
+
+The frame limit is not a setting the client exposes — it is one engine flag that the task scheduler reads each frame:
+
+```lua
+setfflag("DFIntTaskSchedulerTargetFps", "10000")
+```
+
+`10000` removes the cap. The client then renders as fast as it can, bounded by the display. Anything from `60` to `240` is a real cap, `0` or a very high number is effectively none.
+
+Graphics flags, applied by **Low Graphics**:
+
+| Flag | Value | Effect |
+|---|---|---|
+| `DFIntDebugFRMQualityLevelOverride` | `1` | forces the renderer to quality level 1 (of 21) |
+| `FIntRenderShadowIntensity` | `0` | kills shadows |
+| `FIntFRMMinGrassDistance` / `FIntFRMMaxGrassDistance` | `0` / `0` | no grass |
+| `FIntRenderGrassDetailStrands` | `0` | no grass strands |
+| `DFFlagTextureQualityOverrideEnabled` | `true` | enables the texture override |
+| `DFIntTextureQualityOverride` | `0` | lowest textures |
+| `FFlagDisablePostFx` | `true` | no bloom / DOF / colour correction |
+| `FIntRenderLocalLightUpdatesMax` / `Min` | `1` / `0` | fewer dynamic lights |
+| `FFlagDebugSkyGray` | `true` | flat sky, skips the skybox pass |
+
+All of these go through `setfflag`, so the executor has to expose it. If it does not, the panel says so once and the toggles do nothing — nothing crashes.
+
+**Limits worth knowing**
+
+- On iOS the renderer is vsynced to the display: uncapped means "as fast as the panel runs", which is 60 Hz on most iPhones and 120 Hz on ProMotion models. No flag gets past that.
+- Sustained max FPS on a phone means heat, then thermal throttling, then the frame rate dropping below what a moderate cap would have held. `120` is usually the better setting for long sessions.
+- Some flags are only read at startup. If a graphics change does not take effect, restart Roblox and re-execute.
+- The **FPS Cap** survives **UNLOAD** on purpose; Low Graphics is restored to the values it captured before the script changed them.
+
+**Desktop equivalent** — same flags in `%LOCALAPPDATA%\Roblox\Versions\<version>\ClientSettings\ClientAppSettings.json`:
+
+```json
+{
+  "DFIntTaskSchedulerTargetFps": "10000",
+  "DFIntDebugFRMQualityLevelOverride": "1",
+  "FIntRenderShadowIntensity": "0",
+  "FIntFRMMinGrassDistance": "0",
+  "FIntFRMMaxGrassDistance": "0",
+  "FIntRenderGrassDetailStrands": "0",
+  "DFFlagTextureQualityOverrideEnabled": "True",
+  "DFIntTextureQualityOverride": "0",
+  "FFlagDisablePostFx": "True",
+  "FIntRenderLocalLightUpdatesMax": "1",
+  "FIntRenderLocalLightUpdatesMin": "0",
+  "FFlagDebugSkyGray": "True"
+}
+```
+
 ## Usage
 
 1. `Sentinel.luau` is hosted in this repository (public, raw).
@@ -74,6 +126,14 @@ Re-executing unloads the previous instance first (the API handle lives at `getge
 | `Trail` | `true` | Drawing line from you to the ball |
 | `OverrideRemote` | `""` | dot path override for the parry remote |
 | `ToggleKey` | `RightShift` | auto-parry toggle |
+
+`Perf` (separate table, same file):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Unlimited` | `true` | sets the FPS flag to 10000 instead of `TargetFps` |
+| `TargetFps` | `120` | cap used when `Unlimited` is off |
+| `LowGraphics` | `true` | applies the graphics flag set on load |
 
 ## Verification status
 

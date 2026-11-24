@@ -83,6 +83,12 @@ local Config = {
 	ToggleKey = Enum.KeyCode.RightShift,
 }
 
+local Perf = {
+	Unlimited = true,
+	TargetFps = 120,
+	LowGraphics = true,
+}
+
 -- ---------------------------------------------------------------- state
 
 local connections = {}
@@ -595,6 +601,101 @@ local function updateTrail(hrp, part)
 	end)
 end
 
+-- ---------------------------------------------------------------- performance
+
+local setFlag, getFlag = nil, nil
+do
+	local okSetter, setter = pcall(function()
+		return setfflag
+	end)
+	if okSetter and type(setter) == "function" then
+		setFlag = setter
+	end
+	if not setFlag and type(ENV.setfflag) == "function" then
+		setFlag = ENV.setfflag
+	end
+
+	local okGetter, getter = pcall(function()
+		return getfflag
+	end)
+	if okGetter and type(getter) == "function" then
+		getFlag = getter
+	end
+	if not getFlag and type(ENV.getfflag) == "function" then
+		getFlag = ENV.getfflag
+	end
+end
+
+-- Flags a Roblox build does not know are ignored by the client; setting one that
+-- was renamed in a newer build is harmless.
+local GRAPHICS_FLAGS = {
+	{ "DFIntDebugFRMQualityLevelOverride", 1 },
+	{ "FIntRenderShadowIntensity", 0 },
+	{ "FIntFRMMinGrassDistance", 0 },
+	{ "FIntFRMMaxGrassDistance", 0 },
+	{ "FIntRenderGrassDetailStrands", 0 },
+	{ "DFFlagTextureQualityOverrideEnabled", true },
+	{ "DFIntTextureQualityOverride", 0 },
+	{ "FFlagDisablePostFx", true },
+	{ "FIntRenderLocalLightUpdatesMax", 1 },
+	{ "FIntRenderLocalLightUpdatesMin", 0 },
+	{ "FFlagDebugSkyGray", true },
+}
+
+local flagPrev = {}
+local fpsAvg = 0
+
+local function flagString(value)
+	if type(value) == "boolean" then
+		return value and "true" or "false"
+	end
+	return tostring(value)
+end
+
+local function applyFlag(name, value)
+	if not setFlag then
+		return false
+	end
+
+	if flagPrev[name] == nil then
+		local captured = nil
+		if getFlag then
+			local ok, current = pcall(getFlag, name)
+			if ok then
+				captured = current
+			end
+		end
+		flagPrev[name] = captured or false
+	end
+
+	return pcall(setFlag, name, flagString(value))
+end
+
+local function restoreFlag(name)
+	if not setFlag then
+		return
+	end
+	local previous = flagPrev[name]
+	if previous == nil or previous == false then
+		return
+	end
+	pcall(setFlag, name, flagString(previous))
+end
+
+local function applyFpsCap()
+	applyFlag("DFIntTaskSchedulerTargetFps", Perf.Unlimited and 10000 or Perf.TargetFps)
+end
+
+local function applyGraphicsFlags()
+	for _, flag in ipairs(GRAPHICS_FLAGS) do
+		if Perf.LowGraphics then
+			applyFlag(flag[1], flag[2])
+		else
+			restoreFlag(flag[1])
+		end
+	end
+end
+
 -- ---------------------------------------------------------------- UI
 
 local Theme = {
@@ -970,6 +1071,33 @@ end, function(v)
 	return string.format("%d", math.round(v))
 end)
 
+sectionLabel("PERFORMANCE")
+
+makeToggle(body, "Unlimited FPS", function()
+	return Perf.Unlimited
+end, function(v)
+	Perf.Unlimited = v
+	applyFpsCap()
+end)
+
+makeSlider(body, "FPS Cap", 30, 240, 30, function()
+	return Perf.TargetFps
+end, function(v)
+	Perf.TargetFps = math.round(v)
+	if not Perf.Unlimited then
+		applyFpsCap()
+	end
+end, function(v)
+	return string.format("%d", math.round(v))
+end)
+
+makeToggle(body, "Low Graphics", function()
+	return Perf.LowGraphics
+end, function(v)
+	Perf.LowGraphics = v
+	applyGraphicsFlags()
+end)
+
 sectionLabel("VISUALS")
 
 makeToggle(body, "Highlight Incoming", function()
@@ -987,7 +1115,7 @@ end)
 sectionLabel("STATUS")
 
 local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, 0, 0, 62)
+statusLabel.Size = UDim2.new(1, 0, 0, 78)
 statusLabel.BackgroundColor3 = Theme.panel
 statusLabel.BorderSizePixel = 0
 statusLabel.Font = Enum.Font.Code
@@ -1062,12 +1190,14 @@ local function refreshStatus()
 	local speedText = currentSpeed and string.format("%.0f", currentSpeed) or "--"
 
 	statusLabel.Text = string.format(
-		"remote   %s\nwindow   %.2fs  |  eta %s\nspeed    %s st/s  |  fired %d",
+		"remote   %s\nwindow   %.2fs  |  eta %s\nspeed    %s st/s  |  fired %d\nfps      %.0f  |  cap %s",
 		remoteName,
 		Config.Window,
 		etaText,
 		speedText,
-		parryCount
+		parryCount,
+		fpsAvg,
+		Perf.Unlimited and "uncapped" or tostring(Perf.TargetFps)
 	)
 	if currentTargeted then
 		statusLabel.TextColor3 = Theme.good
@@ -1092,9 +1222,14 @@ local stepConnection = (RunService.PreSimulation or RunService.Heartbeat):Connec
 track(stepConnection)
 
 -- visual pass
-track(RunService.RenderStepped:Connect(function()
+track(RunService.RenderStepped:Connect(function(dt)
 	if destroyed then
 		return
+	end
+
+	if dt and dt > 0 then
+		local instant = 1 / dt
+		fpsAvg = fpsAvg > 0 and (fpsAvg + (instant - fpsAvg) * 0.1) or instant
 	end
 
 	local char = LocalPlayer.Character
@@ -1179,6 +1314,10 @@ local function Destroy()
 		trailLine = nil
 	end
 
+	for _, flag in ipairs(GRAPHICS_FLAGS) do
+		restoreFlag(flag[1])
+	end
+
 	if gui then
 		gui:Destroy()
 	end
@@ -1199,9 +1338,15 @@ ENV.Sentinel = Sentinel
 
 resolveParryRemote()
 bindBallsFolder()
+applyFpsCap()
+applyGraphicsFlags()
 refreshAll()
 
-notify(string.format(
-	"loaded | remote: %s",
-	parryRemote and parryRemote:GetFullName() or "not found"
-))
+if not setFlag then
+	notify("setfflag unavailable in this executor — FPS and graphics flags skipped")
+else
+	notify(string.format(
+		"loaded | remote: %s",
+		parryRemote and parryRemote:GetFullName() or "not found"
+	))
+end
